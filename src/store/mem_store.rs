@@ -3,13 +3,13 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
-use crate::store::Store;
+use crate::store::{Store, Value};
 
 pub const DEFAULT_STORE_CAPACITY: usize = 4096;
 
 /// [DateCount] stores the creation time and the current count.
-#[derive(Debug, Clone)]
-pub(crate) struct DateCount {
+#[derive(Debug, Clone, Copy)]
+pub struct DateCount {
     pub create_date: DateTime<Utc>,
     pub count: u32,
 }
@@ -33,6 +33,16 @@ impl DateCount {
     pub fn expired_at(&self, ttl: chrono::Duration, instant: DateTime<Utc>) -> bool {
         self.create_date + ttl < instant
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct DateCountUntil {
+    pub date_count: DateCount,
+    pub until: DateTime<Utc>,
+}
+
+impl Value for DateCountUntil {
+    type Count = u32;
 }
 
 /// [MemStore] stores data in memory.
@@ -60,12 +70,18 @@ impl Store for MemStore {
     /// We don't have any error here.
     type Error = ();
     type Key = String;
+    type Value = DateCountUntil;
+    type Count = u32;
 
-    async fn incr_by(&self, key: Self::Key, val: u32) -> Result<u32, Self::Error> {
+    async fn incr_by(&self, key: Self::Key, val: u32) -> Result<Self::Value, Self::Error> {
         Ok(self.inner.lock().await.incr_by(key, val))
     }
 
-    async fn del(&self, key: Self::Key) -> Result<u32, Self::Error> {
+    async fn incr(&self, key: Self::Key) -> Result<Self::Value, Self::Error> {
+        self.incr_by(key, 1).await
+    }
+
+    async fn del(&self, key: Self::Key) -> Result<Option<Self::Value>, Self::Error> {
         Ok(self.inner.lock().await.del(key))
     }
 
@@ -92,7 +108,7 @@ impl MemStoreInner {
         }
     }
 
-    pub fn incr_by(&mut self, key: String, val: u32) -> u32 {
+    pub fn incr_by(&mut self, key: String, val: u32) -> DateCountUntil {
         let entry = self.data.entry(key).or_default();
 
         if entry.expired(self.ttl) {
@@ -100,13 +116,19 @@ impl MemStoreInner {
         }
 
         entry.count += val;
-        entry.count
+
+        DateCountUntil {
+            date_count: *entry,
+            until: entry.create_date + self.ttl,
+        }
     }
 
-    pub fn del(&mut self, key: String) -> u32 {
+    pub fn del(&mut self, key: String) -> Option<DateCountUntil> {
         self.data.remove(&key)
-            .map(|date_count| date_count.count)
-            .unwrap_or_default()
+            .map(|entry| DateCountUntil {
+                date_count: entry,
+                until: entry.create_date + self.ttl,
+            })
     }
 
     pub fn clear(&mut self) {
@@ -136,27 +158,27 @@ mod tests {
     async fn incr_del() -> Result<(), ()> {
         let store = MemStore::new(8, chrono::Duration::seconds(100000));
 
-        assert_eq!(store.incr("John".to_string()).await?, 1);
-        assert_eq!(store.incr("John".to_string()).await?, 2);
-        assert_eq!(store.incr("John".to_string()).await?, 3);
-        assert_eq!(store.incr_by("John".to_string(), 2).await?, 5);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 1);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 2);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 3);
+        assert_eq!(store.incr_by("John".to_string(), 2).await?.date_count.count, 5);
 
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 3);
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 6);
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 9);
-        assert_eq!(store.incr_by("Meg".to_string(), 4).await?, 13);
-        assert_eq!(store.incr_by("Meg".to_string(), 4).await?, 17);
-        assert_eq!(store.incr("Meg".to_string()).await?, 18);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 3);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 6);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 9);
+        assert_eq!(store.incr_by("Meg".to_string(), 4).await?.date_count.count, 13);
+        assert_eq!(store.incr_by("Meg".to_string(), 4).await?.date_count.count, 17);
+        assert_eq!(store.incr("Meg".to_string()).await?.date_count.count, 18);
 
         let cloned = store.clone();
-        assert_eq!(cloned.incr("John".to_string()).await?, 6);
-        assert_eq!(store.incr("John".to_string()).await?, 7);
+        assert_eq!(cloned.incr("John".to_string()).await?.date_count.count, 6);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 7);
 
         store.del("Meg".to_string()).await?;
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 3);
-        assert_eq!(cloned.incr_by("Meg".to_string(), 3).await?, 6);
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 9);
-        assert_eq!(store.incr("John".to_string()).await?, 8);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 3);
+        assert_eq!(cloned.incr_by("Meg".to_string(), 3).await?.date_count.count, 6);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 9);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 8);
 
         Ok(())
     }
@@ -165,12 +187,12 @@ mod tests {
     async fn clear() -> Result<(), ()> {
         let store = MemStore::new(8, chrono::Duration::seconds(100000));
 
-        assert_eq!(store.incr("John".to_string()).await?, 1);
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 3);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 1);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 3);
 
         store.clear().await?;
-        assert_eq!(store.incr("John".to_string()).await?, 1);
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 3);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 1);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 3);
 
         Ok(())
     }
@@ -178,16 +200,16 @@ mod tests {
     #[tokio::test]
     async fn ttl() -> Result<(), ()> {
         let store = MemStore::new(8, chrono::Duration::seconds(5));
-        assert_eq!(store.incr("John".to_string()).await?, 1);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 1);
 
         // wait 2 seconds to add a new one...
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 3);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 3);
 
         // wait 4 seconds, "John" should be expired, while "Meg" should still exist.
         tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
-        assert_eq!(store.incr("John".to_string()).await?, 1);
-        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 6);
+        assert_eq!(store.incr("John".to_string()).await?.date_count.count, 1);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?.date_count.count, 6);
 
         Ok(())
     }

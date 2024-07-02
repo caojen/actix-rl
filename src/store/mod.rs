@@ -17,24 +17,29 @@ pub trait Store {
     /// in key-value pairs.
     type Key: Send;
 
+    /// [Value] is a structure used to represent values,
+    /// such as the current count and the initial time.
+    type Value: Value;
+
+    /// Alias of [Value::Count].
+    type Count: Send;
+
     /// The [incr_by] function takes a [Key] and
     /// an unsigned integer, indicating the amount
     /// by which the index should be incremented.
     ///
     /// The function returns the result of
     /// the incremented count.
-    async fn incr_by(&self, key: Self::Key, val: u32) -> Result<u32, Self::Error>;
+    async fn incr_by(&self, key: Self::Key, val: Self::Count) -> Result<Self::Value, Self::Error>;
 
     /// The [incr] function is a wrapper for the [incr_by] function,
     /// with val = 1.
-    async fn incr(&self, key: Self::Key) -> Result<u32, Self::Error> {
-        self.incr_by(key, 1).await
-    }
+    async fn incr(&self, key: Self::Key) -> Result<Self::Value, Self::Error>;
 
     /// The [del] function deletes the storage of
     /// the index [Key] and returns the count result
     /// before deletion.
-    async fn del(&self, key: Self::Key) -> Result<u32, Self::Error>;
+    async fn del(&self, key: Self::Key) -> Result<Option<Self::Value>, Self::Error>;
 
     /// The [clear] function clears all cached data.
     ///
@@ -44,4 +49,9 @@ pub trait Store {
     /// relational database, bulk clearing of data
     /// is slow and unnecessary), the function can do nothing.
     async fn clear(&self) -> Result<(), Self::Error>;
+}
+
+pub trait Value: Send {
+    /// [Count] is the type of the counter, such as [u32].
+    type Count: Send;
 }
