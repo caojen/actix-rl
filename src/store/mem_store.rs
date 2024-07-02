@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::time;
+use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 use crate::store::Store;
 
@@ -10,14 +10,14 @@ pub const DEFAULT_STORE_CAPACITY: usize = 4096;
 /// [DateCount] stores the creation time and the current count.
 #[derive(Debug, Clone)]
 pub(crate) struct DateCount {
-    pub create_date: time::Instant,
+    pub create_date: DateTime<Utc>,
     pub count: u32,
 }
 
 impl Default for DateCount {
     fn default() -> Self {
         Self {
-            create_date: time::Instant::now(),
+            create_date: Utc::now(),
             count: 0u32,
         }
     }
@@ -25,12 +25,12 @@ impl Default for DateCount {
 
 impl DateCount {
     /// Check if [DateCount] has expired.
-    pub fn expired(&self, ttl: time::Duration) -> bool {
-        self.expired_at(ttl, time::Instant::now())
+    pub fn expired(&self, ttl: chrono::Duration) -> bool {
+        self.expired_at(ttl, Utc::now())
     }
 
     /// Check if [DateCount] has expired at instant.
-    pub fn expired_at(&self, ttl: time::Duration, instant: time::Instant) -> bool {
+    pub fn expired_at(&self, ttl: chrono::Duration, instant: DateTime<Utc>) -> bool {
         self.create_date + ttl < instant
     }
 }
@@ -42,7 +42,7 @@ pub struct MemStore {
 }
 
 impl MemStore {
-    pub fn new(capacity: usize, ttl: time::Duration) -> Self {
+    pub fn new(capacity: usize, ttl: chrono::Duration) -> Self {
         Self {
             inner: Arc::new(Mutex::new(MemStoreInner::new(capacity, ttl))),
         }
@@ -51,7 +51,7 @@ impl MemStore {
 
 impl Default for MemStore {
     fn default() -> Self {
-        Self::new(DEFAULT_STORE_CAPACITY, time::Duration::from_secs(60))
+        Self::new(DEFAULT_STORE_CAPACITY, chrono::Duration::seconds(60))
     }
 }
 
@@ -81,11 +81,11 @@ pub(crate) struct MemStoreInner {
     /// The [ttl] field indicates the time-to-live (TTL)
     /// of data from its creation. Once this TTL expires,
     /// the data in the cache is considered empty or expired.
-    pub(crate) ttl: time::Duration,
+    pub(crate) ttl: chrono::Duration,
 }
 
 impl MemStoreInner {
-    pub fn new(capacity: usize, ttl: time::Duration) -> Self {
+    pub fn new(capacity: usize, ttl: chrono::Duration) -> Self {
         Self {
             data: HashMap::with_capacity(capacity),
             ttl,
@@ -134,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn incr_del() -> Result<(), ()> {
-        let store = MemStore::new(8, time::Duration::from_secs(100000));
+        let store = MemStore::new(8, chrono::Duration::seconds(100000));
 
         assert_eq!(store.incr("John".to_string()).await?, 1);
         assert_eq!(store.incr("John".to_string()).await?, 2);
@@ -163,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear() -> Result<(), ()> {
-        let store = MemStore::new(8, time::Duration::from_secs(100000));
+        let store = MemStore::new(8, chrono::Duration::seconds(100000));
 
         assert_eq!(store.incr("John".to_string()).await?, 1);
         assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 3);
@@ -177,7 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn ttl() -> Result<(), ()> {
-        let store = MemStore::new(8, time::Duration::from_secs(5));
+        let store = MemStore::new(8, chrono::Duration::seconds(5));
         assert_eq!(store.incr("John".to_string()).await?, 1);
 
         // wait 2 seconds to add a new one...
