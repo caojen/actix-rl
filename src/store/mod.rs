@@ -7,8 +7,10 @@ pub use mem_store::*;
 /// or in Redis in the form of key-value pairs.
 ///
 /// All methods are implemented in an async manner.
+///
+/// [Store] can be [Clone], use [Arc] to store it.
 #[async_trait::async_trait]
-pub trait Store {
+pub trait Store: Clone + Send + Sync {
     /// [Error] represents possible errors that may
     /// occur during the execution of a function.
     type Error;

@@ -67,7 +67,6 @@ impl Default for MemStore {
 
 #[async_trait::async_trait]
 impl Store for MemStore {
-    /// We don't have any error here.
     type Error = ();
     type Key = String;
     type Value = DateCountUntil;
