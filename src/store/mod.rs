@@ -1,4 +1,5 @@
 mod mem_store;
+#[allow(unused_imports)]
 pub use mem_store::*;
 
 /// [Store] indicates the location and method of caching,

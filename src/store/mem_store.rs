@@ -174,4 +174,21 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn ttl() -> Result<(), ()> {
+        let store = MemStore::new(8, time::Duration::from_secs(5));
+        assert_eq!(store.incr("John".to_string()).await?, 1);
+
+        // wait 2 seconds to add a new one...
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 3);
+
+        // wait 4 seconds, "John" should be expired, while "Meg" should still exist.
+        tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
+        assert_eq!(store.incr("John".to_string()).await?, 1);
+        assert_eq!(store.incr_by("Meg".to_string(), 3).await?, 6);
+
+        Ok(())
+    }
 }
