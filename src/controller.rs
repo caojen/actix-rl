@@ -42,13 +42,13 @@ impl<T: Store, B: MessageBody> Controller<T, B> {
         self
     }
 
-    /// Set the [HttpResponse<B>] to be returned when a rate-limit error occurs.
+    /// Set the [`HttpResponse<B>`] to be returned when a rate-limit error occurs.
     pub fn on_rate_limit_error(mut self, f: FromRequestOnError<Error, HttpResponse<B>>) -> Self {
         self.fn_on_rate_limit_error = Some(f);
         self
     }
 
-    /// Set the [HttpResponse] to be returned when an error occurs in the [Store]
+    /// Set the [`HttpResponse<B>`] to be returned when an error occurs in the [Store]
     /// (such as Redis or other storage structures).
     pub fn on_store_error(mut self, f: FromRequestOnError<<T as Store>::Error, HttpResponse<B>>) -> Self {
         self.fn_on_store_error = Some(f);

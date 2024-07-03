@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Error {
-    /// [RateLimited] indicates that the limit has been reached
+    /// [Self::RateLimited] indicates that the limit has been reached
     /// and returns the time when the limit will be lifted.
     RateLimited(Option<DateTime<Utc>>),
 }
