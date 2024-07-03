@@ -1,10 +1,10 @@
 mod mem_store;
+#[allow(unused_imports)]
+pub use mem_store::*;
 
 use std::ops::Deref;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
-#[allow(unused_imports)]
-pub use mem_store::*;
 
 /// [Store] indicates the location and method of caching,
 /// such as storing in memory ([MemStore]) in the form of a HashMap
