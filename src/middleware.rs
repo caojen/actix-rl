@@ -8,9 +8,9 @@ use futures_util::future::{LocalBoxFuture, Ready, ready};
 use crate::error::Error;
 use crate::store::{Store, Value};
 
-type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I>;
+type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I + 'static>;
 
-type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R>;
+type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R + 'static>;
 
 pub struct RateLimit<T: Store> {
     inner: Arc<RateLimitInner<T>>,
@@ -19,6 +19,7 @@ pub struct RateLimit<T: Store> {
 struct RateLimitInner<T: Store> {
     pub store: T,
     pub max: <<T as Store>::Value as Value>::Count,
+    pub fn_do_rate_limit: FromRequestFunc<bool>,
     pub fn_find_identifier: FromRequestFunc<T::Key>,
     pub fn_on_rate_limit_error: FromRequestOnError<Error, HttpResponse>,
     pub fn_on_store_error: FromRequestOnError<<T as Store>::Error, HttpResponse>,
@@ -69,20 +70,23 @@ impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
 
     fn call(&self, svc: ServiceRequest) -> Self::Future {
         let service = self.service.clone();
+        let do_rate_limit = (self.inner.fn_do_rate_limit)(svc.request());
         let identifier = (self.inner.fn_find_identifier)(svc.request());
         let inner = self.inner.clone();
 
         Box::pin(async move {
-            let req = svc.request();
-            match inner.store.incr(identifier).await {
-                Err(e) => {
-                    let body = (inner.fn_on_store_error)(req, e);
-                    return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
-                },
-                Ok(value) => if value.count() > inner.max {
-                    let body = (inner.fn_on_rate_limit_error)(req, Error::RateLimited(value.expire_date()));
-                    return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
-                },
+            if do_rate_limit {
+                let req = svc.request();
+                match inner.store.incr(identifier).await {
+                    Err(e) => {
+                        let body = (inner.fn_on_store_error)(req, e);
+                        return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
+                    },
+                    Ok(value) => if value.count() > inner.max {
+                        let body = (inner.fn_on_rate_limit_error)(req, Error::RateLimited(value.expire_date()));
+                        return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
+                    },
+                }
             }
 
             let res = service.call(svc).await?.map_into_left_body();
@@ -96,17 +100,19 @@ impl<T: Store> RateLimit<T> {
     pub fn new(
         store: T,
         max: <<T as Store>::Value as Value>::Count,
-        find_identifier: FromRequestFunc<T::Key>,
-        on_rate_limit_error: FromRequestOnError<Error, HttpResponse>,
-        on_store_error: FromRequestOnError<<T as Store>::Error, HttpResponse>,
+        do_rate_limit: impl Fn(&HttpRequest) -> bool + 'static,
+        find_identifier: impl Fn(&HttpRequest) -> T::Key + 'static,
+        on_rate_limit_error: impl Fn(&HttpRequest, Error) -> HttpResponse + 'static,
+        on_store_error: impl Fn(&HttpRequest, <T as Store>::Error) -> HttpResponse + 'static,
     ) -> Self {
         Self {
             inner: Arc::new(RateLimitInner {
                 store,
                 max,
-                fn_find_identifier: find_identifier,
-                fn_on_rate_limit_error: on_rate_limit_error,
-                fn_on_store_error: on_store_error,
+                fn_do_rate_limit: Box::new(do_rate_limit),
+                fn_find_identifier: Box::new(find_identifier),
+                fn_on_rate_limit_error: Box::new(on_rate_limit_error),
+                fn_on_store_error: Box::new(on_store_error),
             })
         }
     }
@@ -118,6 +124,7 @@ impl<T: Store<Key = String> + 'static> RateLimit<T> {
         Self::new(
             store,
             max,
+            Box::new(default_do_rate_limit),
             Box::new(default_find_identifier),
             Box::new(default_on_rate_limit_error),
             Box::new(default_on_store_error::<T>),
@@ -125,7 +132,11 @@ impl<T: Store<Key = String> + 'static> RateLimit<T> {
     }
 }
 
-fn default_find_identifier(req: &HttpRequest) -> String {
+pub fn default_do_rate_limit(_: &HttpRequest) -> bool {
+    true
+}
+
+pub fn default_find_identifier(req: &HttpRequest) -> String {
     req.peer_addr()
         .map(|addr| addr.ip().to_string())
         .unwrap_or("<Unknown Source IP>".to_string())
@@ -133,7 +144,7 @@ fn default_find_identifier(req: &HttpRequest) -> String {
 
 const RATE_LIMITED_UNTIL_HEADER: &str = "X-Rate-Limited-Until";
 
-fn default_on_rate_limit_error(_: &HttpRequest, error: Error) -> HttpResponse {
+pub fn default_on_rate_limit_error(_: &HttpRequest, error: Error) -> HttpResponse {
     match error {
         Error::RateLimited(until) => {
             let mut builder = HttpResponseBuilder::new(StatusCode::TOO_MANY_REQUESTS);
@@ -147,7 +158,7 @@ fn default_on_rate_limit_error(_: &HttpRequest, error: Error) -> HttpResponse {
     }
 }
 
-fn default_on_store_error<T: Store>(_: &HttpRequest, _: T::Error) -> HttpResponse {
+pub fn default_on_store_error<T: Store>(_: &HttpRequest, _: T::Error) -> HttpResponse {
     HttpResponse::new(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -166,7 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_middleware() -> anyhow::Result<()> {
-        let store = MemStore::new(1024, chrono::Duration::seconds(60));
+        let store = MemStore::new(1024, chrono::Duration::seconds(10));
 
         let app = test::init_service(
             App::new()
@@ -191,6 +202,66 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
             let ts = resp.headers().get(RATE_LIMITED_UNTIL_HEADER).unwrap().to_str().unwrap_or_default();
             wait_until = ts.parse().unwrap();
+        }
+
+        println!("rate limited until: {}", wait_until);
+        tokio::time::sleep_until(
+            Instant::now() + chrono::Duration::seconds(wait_until - Utc::now().timestamp() + 1).to_std().unwrap()
+        ).await;
+
+        // ok...
+        for _ in 0..5 {
+            let req = test::TestRequest::get().to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        }
+
+        Ok(())
+    }
+
+    fn test_do_rate_limit_default_rate_limit_func(req: &HttpRequest) -> bool {
+        req.path() != "/bypass"
+    }
+
+    #[tokio::test]
+    async fn test_do_rate_limit() -> anyhow::Result<()> {
+        let store = MemStore::new(1024, chrono::Duration::seconds(10));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(RateLimit::new(
+                    store,
+                    10,
+                    test_do_rate_limit_default_rate_limit_func,
+                    default_find_identifier,
+                    default_on_rate_limit_error,
+                    default_on_store_error::<MemStore>,
+                ))
+                .route("/", web::get().to(empty))
+                .route("/bypass", web::get().to(empty))
+        ).await;
+
+        for _ in 0..10 {
+            let req = test::TestRequest::get().to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        }
+
+        // then, rate limited...
+        let mut wait_until = 0i64;
+        for _ in 0..10 {
+            let req = test::TestRequest::get().to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+            let ts = resp.headers().get(RATE_LIMITED_UNTIL_HEADER).unwrap().to_str().unwrap_or_default();
+            wait_until = ts.parse().unwrap();
+        }
+
+        // but /bypass will not be rate_limited
+        for _ in 0..10 {
+            let req = test::TestRequest::get().uri("/bypass").to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         }
 
         println!("rate limited until: {}", wait_until);
