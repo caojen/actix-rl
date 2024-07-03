@@ -1,31 +1,30 @@
 use std::rc::Rc;
 use std::sync::Arc;
 use actix_web::{HttpRequest, HttpResponse, HttpResponseBuilder};
-use actix_web::body::EitherBody;
+use actix_web::body::{BoxBody, EitherBody};
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::StatusCode;
 use futures_util::future::{LocalBoxFuture, Ready, ready};
+use futures_util::FutureExt;
+use crate::controller::{Controller, default_do_rate_limit, default_on_rate_limit_error, default_on_store_error};
 use crate::error::Error;
 use crate::store::{Store, Value};
 
-pub(crate) type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I + 'static>;
-
-pub(crate) type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R + 'static>;
-
-pub struct RateLimit<T: Store> {
-    inner: Arc<RateLimitInner<T>>,
+/// [RateLimit] is the rate-limit middleware.
+///
+/// Params [T]: the [Store];
+/// Params [CB]: the response body for [Controller]. (ControllerBody)
+pub struct RateLimit<T: Store, CB = BoxBody> {
+    inner: Arc<RateLimitInner<T, CB>>,
 }
 
-struct RateLimitInner<T: Store> {
+struct RateLimitInner<T: Store, CB = BoxBody> {
     pub store: T,
     pub max: <<T as Store>::Value as Value>::Count,
-    pub fn_do_rate_limit: FromRequestFunc<bool>,
-    pub fn_find_identifier: FromRequestFunc<T::Key>,
-    pub fn_on_rate_limit_error: FromRequestOnError<Error, HttpResponse>,
-    pub fn_on_store_error: FromRequestOnError<<T as Store>::Error, HttpResponse>,
+    pub controller: Controller<T, CB>,
 }
 
-impl<T, S, B> Transform<S, ServiceRequest> for RateLimit<T>
+impl<T, CB, S, B> Transform<S, ServiceRequest> for RateLimit<T, CB>
     where
         T: Store + 'static,
         S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
@@ -33,9 +32,9 @@ impl<T, S, B> Transform<S, ServiceRequest> for RateLimit<T>
         B: 'static,
         <T as Store>::Key: 'static,
 {
-    type Response = ServiceResponse<EitherBody<B>>;
+    type Response = ServiceResponse<EitherBody<B, CB>>;
     type Error = S::Error;
-    type Transform = RateLimitService<T, S>;
+    type Transform = RateLimitService<T, CB, S>;
     type InitError = ();
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
@@ -47,14 +46,14 @@ impl<T, S, B> Transform<S, ServiceRequest> for RateLimit<T>
     }
 }
 
-pub struct RateLimitService<T, S>
+pub struct RateLimitService<T, CB, S>
     where T: Store,
 {
-    inner: Arc<RateLimitInner<T>>,
+    inner: Arc<RateLimitInner<T, CB>>,
     service: Rc<S>,
 }
 
-impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
+impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
     where
         T: Store + 'static,
         S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
@@ -62,7 +61,7 @@ impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
         B: 'static,
         <T as Store>::Key: 'static,
 {
-    type Response = ServiceResponse<EitherBody<B>>;
+    type Response = ServiceResponse<EitherBody<B, EitherBody<B, CB>>>;
     type Error = S::Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -70,22 +69,60 @@ impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
 
     fn call(&self, svc: ServiceRequest) -> Self::Future {
         let service = self.service.clone();
-        let do_rate_limit = (self.inner.fn_do_rate_limit)(svc.request());
-        let identifier = (self.inner.fn_find_identifier)(svc.request());
         let inner = self.inner.clone();
 
         Box::pin(async move {
+            let do_rate_limit = if let Some(f) = &inner.controller.fn_do_rate_limit {
+                f(svc.request())
+            } else {
+                // use default function
+                default_do_rate_limit(svc.request())
+            };
+
             if do_rate_limit {
-                let req = svc.request();
-                match inner.store.incr(identifier).await {
-                    Err(e) => {
-                        let body = (inner.fn_on_store_error)(req, e);
-                        return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
-                    },
-                    Ok(value) => if value.count() > inner.max {
-                        let body = (inner.fn_on_rate_limit_error)(req, Error::RateLimited(value.expire_date()));
-                        return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
-                    },
+                // get identifier of this request
+                let identifier = inner.controller.fn_find_identifier.as_ref()
+                    .map(|f| f(svc.request()));
+
+                if let Some(identifier) = identifier {
+                    let req = svc.request();
+                    match inner.store.incr(identifier).await {
+                        Err(e) => {
+                            // store error occur
+                            return if let Some(f) = &inner.controller.fn_on_store_error {
+                                let body = f(req, e);
+                                Ok(ServiceResponse::new(
+                                    req.clone(),
+                                    body.map_into_right_body().map_into_right_body(),
+                                ))
+                            } else {
+                                let body = default_on_store_error::<T>(req, e);
+                                Ok(ServiceResponse::new(
+                                    req.clone(),
+                                    body.map_into_left_body().map_into_right_body(),
+                                ))
+                            }
+
+                        },
+                        Ok(value) => if value.count() > inner.max {
+                            // rate limit error occur
+                            let err = Error::RateLimited(value.expire_date());
+
+                            return if let Some(f) = &inner.controller.fn_on_rate_limit_error {
+                                let body = f(req, err);
+                                Ok(ServiceResponse::new(
+                                    req.clone(),
+                                    body.map_into_right_body().map_into_left_body(),
+                                ))
+                            } else {
+                                let body = default_on_rate_limit_error(req, err);
+                                Ok(ServiceResponse::new(
+                                    req.clone(),
+                                    body.map_into_left_body().map_into_right_body(),
+                                ))
+                            }
+                        },
+                    }
                 }
             }
 
@@ -95,79 +132,40 @@ impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
     }
 }
 
-impl<T: Store> RateLimit<T> {
+impl<T: Store, B> RateLimit<T, B> {
     /// create a new [RateLimit] middleware, with all custom functions.
     pub fn new(
         store: T,
         max: <<T as Store>::Value as Value>::Count,
-        do_rate_limit: impl Fn(&HttpRequest) -> bool + 'static,
-        find_identifier: impl Fn(&HttpRequest) -> T::Key + 'static,
-        on_rate_limit_error: impl Fn(&HttpRequest, Error) -> HttpResponse + 'static,
-        on_store_error: impl Fn(&HttpRequest, <T as Store>::Error) -> HttpResponse + 'static,
+        controller: Controller<T, B>
     ) -> Self {
         Self {
             inner: Arc::new(RateLimitInner {
                 store,
                 max,
-                fn_do_rate_limit: Box::new(do_rate_limit),
-                fn_find_identifier: Box::new(find_identifier),
-                fn_on_rate_limit_error: Box::new(on_rate_limit_error),
-                fn_on_store_error: Box::new(on_store_error),
+                controller,
             })
         }
     }
 }
 
-impl<T: Store<Key = String> + 'static> RateLimit<T> {
+impl<T: Store<Key = String> + 'static, B> RateLimit<T, B> {
     /// create a new [RateLimit] middleware with default functions.
     pub fn new_default(store: T, max: <<T as Store>::Value as Value>::Count) -> Self {
         Self::new(
             store,
             max,
-            Box::new(default_do_rate_limit),
-            Box::new(default_find_identifier),
-            Box::new(default_on_rate_limit_error),
-            Box::new(default_on_store_error::<T>),
+            Controller::default(),
         )
     }
 }
-
-pub fn default_do_rate_limit(_: &HttpRequest) -> bool {
-    true
-}
-
-pub fn default_find_identifier(req: &HttpRequest) -> String {
-    req.peer_addr()
-        .map(|addr| addr.ip().to_string())
-        .unwrap_or("<Unknown Source IP>".to_string())
-}
-
-pub const RATE_LIMITED_UNTIL_HEADER: &str = "X-Rate-Limited-Until";
-
-pub fn default_on_rate_limit_error(_: &HttpRequest, error: Error) -> HttpResponse {
-    match error {
-        Error::RateLimited(until) => {
-            let mut builder = HttpResponseBuilder::new(StatusCode::TOO_MANY_REQUESTS);
-
-            if let Some(until) = until {
-                builder.insert_header((RATE_LIMITED_UNTIL_HEADER, until.timestamp().to_string()));
-            }
-
-            builder.finish()
-        }
-    }
-}
-
-pub fn default_on_store_error<T: Store>(_: &HttpRequest, _: T::Error) -> HttpResponse {
-    HttpResponse::new(StatusCode::INTERNAL_SERVER_ERROR)
-}
-
 
 #[cfg(test)]
 mod tests {
     use actix_web::{App, test, web};
     use chrono::{Utc};
     use tokio::time::Instant;
+    use crate::controller::DEFAULT_RATE_LIMITED_UNTIL_HEADER;
     use crate::store::MemStore;
     use super::*;
 
@@ -200,7 +198,7 @@ mod tests {
             let req = test::TestRequest::get().to_request();
             let resp = test::call_service(&app, req).await;
             assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-            let ts = resp.headers().get(RATE_LIMITED_UNTIL_HEADER).unwrap().to_str().unwrap_or_default();
+            let ts = resp.headers().get(DEFAULT_RATE_LIMITED_UNTIL_HEADER).unwrap().to_str().unwrap_or_default();
             wait_until = ts.parse().unwrap();
         }
 
@@ -227,15 +225,15 @@ mod tests {
     async fn test_do_rate_limit() -> anyhow::Result<()> {
         let store = MemStore::new(1024, chrono::Duration::seconds(10));
 
+        let controller = Controller::default()
+            .with_do_rate_limit(test_do_rate_limit_default_rate_limit_func);
+
         let app = test::init_service(
             App::new()
                 .wrap(RateLimit::new(
                     store,
                     10,
-                    test_do_rate_limit_default_rate_limit_func,
-                    default_find_identifier,
-                    default_on_rate_limit_error,
-                    default_on_store_error::<MemStore>,
+                    controller,
                 ))
                 .route("/", web::get().to(empty))
                 .route("/bypass", web::get().to(empty))
@@ -253,7 +251,7 @@ mod tests {
             let req = test::TestRequest::get().to_request();
             let resp = test::call_service(&app, req).await;
             assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-            let ts = resp.headers().get(RATE_LIMITED_UNTIL_HEADER).unwrap().to_str().unwrap_or_default();
+            let ts = resp.headers().get(DEFAULT_RATE_LIMITED_UNTIL_HEADER).unwrap().to_str().unwrap_or_default();
             wait_until = ts.parse().unwrap();
         }
 

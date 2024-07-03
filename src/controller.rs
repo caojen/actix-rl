@@ -9,10 +9,10 @@ pub(crate) type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I + 'static>;
 pub(crate) type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R + 'static>;
 
 pub struct Controller<T: Store, B = BoxBody> {
-    pub fn_do_rate_limit: Option<FromRequestFunc<bool>>,
-    pub fn_find_identifier: Option<FromRequestFunc<T::Key>>,
-    pub fn_on_rate_limit_error: Option<FromRequestOnError<Error, HttpResponse<B>>>,
-    pub fn_on_store_error: Option<FromRequestOnError<<T as Store>::Error, HttpResponse<B>>>,
+    pub(crate) fn_do_rate_limit: Option<FromRequestFunc<bool>>,
+    pub(crate) fn_find_identifier: Option<FromRequestFunc<T::Key>>,
+    pub(crate) fn_on_rate_limit_error: Option<FromRequestOnError<Error, HttpResponse<B>>>,
+    pub(crate) fn_on_store_error: Option<FromRequestOnError<<T as Store>::Error, HttpResponse<B>>>,
 }
 
 impl<T: Store, B> Controller<T, B> {
