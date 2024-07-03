@@ -14,7 +14,8 @@ pub type RateLimitMiddleware<T, CB> = RateLimit<T, CB>;
 /// [RateLimit] is the rate-limit middleware.
 ///
 /// Params [T]: the [Store];
-/// Params [CB]: the response body for [Controller]. (ControllerBody)
+///
+/// Params [CB]: the response body for [Controller]. (Controller.Body)
 #[derive(Clone)]
 pub struct RateLimit<T: Store, CB: MessageBody = BoxBody> {
     inner: Arc<RateLimitInner<T, CB>>,
