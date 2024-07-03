@@ -1,11 +1,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
-use actix_web::{HttpRequest, HttpResponse};
 use actix_web::body::{BoxBody, EitherBody, MessageBody};
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
-use actix_web::http::StatusCode;
 use futures_util::future::{LocalBoxFuture, Ready, ready};
-use futures_util::FutureExt;
 use crate::controller::{Controller, default_do_rate_limit, default_on_rate_limit_error, default_on_store_error};
 use crate::error::Error;
 use crate::store::{Store, Value};
@@ -155,7 +152,8 @@ impl<T: Store, CB: MessageBody> RateLimit<T, CB> {
 
 #[cfg(test)]
 mod tests {
-    use actix_web::{App, test, web};
+    use actix_web::{App, HttpRequest, HttpResponse, test, web};
+    use actix_web::http::StatusCode;
     use chrono::{Utc};
     use tokio::time::Instant;
     use crate::controller::{default_find_identifier, DEFAULT_RATE_LIMITED_UNTIL_HEADER};
@@ -169,7 +167,7 @@ mod tests {
     #[tokio::test]
     async fn test_middleware() -> anyhow::Result<()> {
         let store = MemStore::new(1024, chrono::Duration::seconds(10));
-        let controller = Controller::<_, BoxBody>::new();
+        let controller = Controller::default();
 
         let app = test::init_service(
             App::new()
@@ -220,7 +218,7 @@ mod tests {
     async fn test_do_rate_limit() -> anyhow::Result<()> {
         let store = MemStore::new(1024, chrono::Duration::seconds(10));
 
-        let controller = Controller::<_, BoxBody>::default()
+        let controller = Controller::<_, BoxBody>::new()
             .with_do_rate_limit(test_do_rate_limit_default_rate_limit_func)
             .with_find_identifier(default_find_identifier)
             .on_rate_limit_error(default_on_rate_limit_error)

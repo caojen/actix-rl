@@ -16,7 +16,7 @@ pub struct Controller<T: Store, B: MessageBody = BoxBody> {
 }
 
 impl<T: Store, B: MessageBody> Controller<T, B> {
-    /// Create a default Controller
+    /// Create a default Controller, with all functions as [None]
     pub fn new() -> Self {
         Self {
             fn_do_rate_limit: None,
@@ -26,31 +26,43 @@ impl<T: Store, B: MessageBody> Controller<T, B> {
         }
     }
 
+    /// Determine if a request needs to be checked for rate limiting.
+    /// If not set, all requests will be checked.
     pub fn with_do_rate_limit(mut self, f: impl Fn(&HttpRequest) -> bool + 'static) -> Self {
         self.fn_do_rate_limit = Some(Box::new(f));
         self
     }
 
+    /// Extract the identifier from the request, such as the IP address or other information.
     pub fn with_find_identifier(mut self, f: impl Fn(&HttpRequest) -> T::Key + 'static) -> Self {
         self.fn_find_identifier = Some(Box::new(f));
         self
     }
 
+    /// Set the [HttpResponse<B>] to be returned when a rate-limit error occurs.
     pub fn on_rate_limit_error(mut self, f: impl Fn(&HttpRequest, Error) -> HttpResponse<B> + 'static) -> Self {
         self.fn_on_rate_limit_error = Some(Box::new(f));
         self
     }
 
+    /// Set the [HttpResponse] to be returned when an error occurs in the [Store]
+    /// (such as Redis or other storage structures).
     pub fn on_store_error(mut self, f: impl Fn(&HttpRequest, <T as Store>::Error) -> HttpResponse<B> + 'static) -> Self {
         self.fn_on_store_error = Some(Box::new(f));
         self
     }
 }
 
-impl<T: Store, B: MessageBody> Default for Controller<T, B> {
-    /// alias of [Self::new]
+impl<T> Default for Controller<T, BoxBody>
+    where T: Store<Key = String> + 'static,
+{
+    /// alias of [Self::new], but use default functions.
     fn default() -> Self {
         Self::new()
+            .with_do_rate_limit(default_do_rate_limit)
+            .with_find_identifier(default_find_identifier)
+            .on_rate_limit_error(default_on_rate_limit_error)
+            .on_store_error(default_on_store_error::<T>)
     }
 }
 
