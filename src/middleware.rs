@@ -142,6 +142,11 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
             // Add a marker to the request to ensure that no further checks are performed on it.
             RateLimitByPass::<T>::check(svc.request(), rate_limit_value);
 
+            // call on-success
+            if let Some(f) = inner.controller.fn_on_success {
+                f(svc.request(), &inner.store);
+            }
+
             // rate-limit bypass
             let res = service.call(svc).await?.map_into_left_body();
             Ok(res)
