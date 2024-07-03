@@ -69,19 +69,19 @@ impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
 
     fn call(&self, svc: ServiceRequest) -> Self::Future {
         let service = self.service.clone();
-        let req = svc.request().clone();
-        let identifier = (self.inner.fn_find_identifier)(&req);
+        let identifier = (self.inner.fn_find_identifier)(svc.request());
         let inner = self.inner.clone();
 
         Box::pin(async move {
+            let req = svc.request();
             match inner.store.incr(identifier).await {
                 Err(e) => {
                     let body = (inner.fn_on_store_error)(&req, e);
-                    return Ok(ServiceResponse::new(req, body.map_into_right_body()));
+                    return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
                 },
                 Ok(value) => if value.count() > inner.max {
                     let body = (inner.fn_on_rate_limit_error)(&req, Error::RateLimited(value.expire_date()));
-                    return Ok(ServiceResponse::new(req, body.map_into_right_body()));
+                    return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
                 },
             }
 
