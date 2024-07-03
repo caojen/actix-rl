@@ -6,6 +6,7 @@ use futures_util::future::{LocalBoxFuture, Ready, ready};
 use crate::controller::{Controller, default_do_rate_limit, default_on_rate_limit_error, default_on_store_error};
 use crate::error::Error;
 use crate::store::{Store, Value};
+use crate::utils::RateLimitByPass;
 
 /// [RateLimit] is the rate-limit middleware.
 ///
@@ -73,7 +74,8 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
         let inner = self.inner.clone();
 
         Box::pin(async move {
-            let do_rate_limit = if let Some(f) = &inner.controller.fn_do_rate_limit {
+            let checked = RateLimitByPass::checked(svc.request());
+            let do_rate_limit = !checked && if let Some(f) = &inner.controller.fn_do_rate_limit {
                 f(svc.request())
             } else {
                 // use default function
@@ -127,6 +129,11 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
                 }
             }
 
+            // rate-limit bypass
+            // Add a marker to the request to ensure that no further checks are performed on it.
+            RateLimitByPass::check(svc.request());
+
+            // rate-limit bypass
             let res = service.call(svc).await?.map_into_left_body();
             Ok(res)
         })

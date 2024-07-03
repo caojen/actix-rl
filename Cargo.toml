@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 async-trait = { version = "0.1" }
-tokio = { version = "1", features = ["full"]}
 actix-web = { version = "4" }
 chrono = { version = "0.4" }
 futures-util = { version = "0.3" }
 
 [dev-dependencies]
 anyhow = "1.0.86"
+tokio = { version = "1.38.0", features = ["full"]}
