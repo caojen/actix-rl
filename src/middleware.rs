@@ -76,11 +76,11 @@ impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
             let req = svc.request();
             match inner.store.incr(identifier).await {
                 Err(e) => {
-                    let body = (inner.fn_on_store_error)(&req, e);
+                    let body = (inner.fn_on_store_error)(req, e);
                     return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
                 },
                 Ok(value) => if value.count() > inner.max {
-                    let body = (inner.fn_on_rate_limit_error)(&req, Error::RateLimited(value.expire_date()));
+                    let body = (inner.fn_on_rate_limit_error)(req, Error::RateLimited(value.expire_date()));
                     return Ok(ServiceResponse::new(req.clone(), body.map_into_right_body()));
                 },
             }
@@ -155,7 +155,7 @@ fn default_on_store_error<T: Store>(_: &HttpRequest, _: T::Error) -> HttpRespons
 #[cfg(test)]
 mod tests {
     use actix_web::{App, test, web};
-    use chrono::{DateTime, Utc};
+    use chrono::{Utc};
     use tokio::time::Instant;
     use crate::store::MemStore;
     use super::*;
