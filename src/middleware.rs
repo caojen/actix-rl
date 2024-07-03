@@ -91,7 +91,7 @@ impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
     }
 }
 
-impl<T: Store> RateLimit<T>{
+impl<T: Store> RateLimit<T> {
     /// create a new [RateLimit] middleware, with all custom functions.
     pub fn new(
         store: T,
