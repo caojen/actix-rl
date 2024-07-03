@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use actix_web::{HttpRequest, HttpResponse, HttpResponseBuilder};
+use actix_web::body::EitherBody;
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::StatusCode;
 use futures_util::future::{LocalBoxFuture, Ready, ready};
 use crate::error::Error;
-use crate::store::Store;
+use crate::store::{Store, Value};
 
 type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I>;
 
@@ -16,19 +17,21 @@ pub struct RateLimit<T: Store> {
 
 struct RateLimitInner<T: Store> {
     pub store: T,
+    pub max: <<T as Store>::Value as Value>::Count,
     pub fn_find_identifier: FromRequestFunc<T::Key>,
     pub fn_on_rate_limit_error: FromRequestOnError<Error, HttpResponse>,
     pub fn_on_store_error: FromRequestOnError<<T as Store>::Error, HttpResponse>,
 }
 
-impl<T, S> Transform<S, ServiceRequest> for RateLimit<T>
+impl<T, S, B> Transform<S, ServiceRequest> for RateLimit<T>
     where
         T: Store + 'static,
-        S: Service<ServiceRequest, Response = HttpResponse, Error = actix_web::Error>,
+        S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
         S::Future: 'static,
+        B: 'static,
         <T as Store>::Key: 'static,
 {
-    type Response = HttpResponse;
+    type Response = ServiceResponse<B>;
     type Error = S::Error;
     type Transform = RateLimitService<T, S>;
     type InitError = ();
@@ -49,14 +52,15 @@ pub struct RateLimitService<T, S>
     service: S,
 }
 
-impl<T, S> Service<ServiceRequest> for RateLimitService<T, S>
+impl<T, S, B> Service<ServiceRequest> for RateLimitService<T, S>
     where
         T: Store + 'static,
-        S: Service<ServiceRequest, Response = HttpResponse, Error = actix_web::Error>,
+        S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
         S::Future: 'static,
+        B: 'static,
         <T as Store>::Key: 'static,
 {
-    type Response = HttpResponse;
+    type Response = ServiceResponse<B>;
     type Error = S::Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -71,8 +75,14 @@ impl<T, S> Service<ServiceRequest> for RateLimitService<T, S>
 
         Box::pin(async move {
             match inner.store.incr(identifier).await {
-                Err(e) => Ok(inner.fn_on_store_error(&req, e)),
-                Ok(value) => todo!(),
+                Err(e) => {
+                    let body = (inner.fn_on_store_error)(&req, e);
+                    return Ok(ServiceResponse::new(req, body));
+                },
+                Ok(value) => if value.count() > inner.max {
+                    let body = (inner.fn_on_rate_limit_error)(&req, Error::RateLimited(value.expire_date()));
+                    return Ok(ServiceResponse::new(req, body));
+                },
             }
 
             let res = fut.await?;
@@ -85,6 +95,7 @@ impl<T: Store> RateLimit<T>{
     /// create a new [RateLimit] middleware, with all custom functions.
     pub fn new(
         store: T,
+        max: <<T as Store>::Value as Value>::Count,
         find_identifier: FromRequestFunc<T::Key>,
         on_rate_limit_error: FromRequestOnError<Error, HttpResponse>,
         on_store_error: FromRequestOnError<<T as Store>::Error, HttpResponse>,
@@ -92,6 +103,7 @@ impl<T: Store> RateLimit<T>{
         Self {
             inner: Arc::new(RateLimitInner {
                 store,
+                max,
                 fn_find_identifier: find_identifier,
                 fn_on_rate_limit_error: on_rate_limit_error,
                 fn_on_store_error: on_store_error,
@@ -102,9 +114,10 @@ impl<T: Store> RateLimit<T>{
 
 impl<T: Store<Key = String> + 'static> RateLimit<T> {
     /// create a new [RateLimit] middleware with default functions.
-    pub fn new_default(store: T) -> Self {
+    pub fn new_default(store: T, max: <<T as Store>::Value as Value>::Count) -> Self {
         Self::new(
             store,
+            max,
             Box::new(default_find_identifier),
             Box::new(default_on_rate_limit_error),
             Box::new(default_on_store_error::<T>),
@@ -120,9 +133,15 @@ fn default_find_identifier(req: &HttpRequest) -> String {
 
 fn default_on_rate_limit_error(_: &HttpRequest, error: Error) -> HttpResponse {
     match error {
-        Error::RateLimited(until) => HttpResponseBuilder::new(StatusCode::TOO_MANY_REQUESTS)
-            .insert_header(("X-Rate-Limit-Until", until.timestamp().to_string()))
-            .finish()
+        Error::RateLimited(until) => {
+            let mut builder = HttpResponseBuilder::new(StatusCode::TOO_MANY_REQUESTS);
+
+            if let Some(until) = until {
+                builder.insert_header(("X-Rate-Limit-Until", until.timestamp().to_string()));
+            }
+
+            builder.finish()
+        }
     }
 }
 
@@ -143,15 +162,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_middleware() -> anyhow::Result<()> {
-        // let app = test::init_service(
-        //     App::new()
-        //         .wrap(RateLimit::new_default(MemStore::new(0, chrono::Duration::seconds(60))))
-        //         .route("/", web::get().to(empty))
-        // ).await;
-        //
-        // let req = test::TestRequest::get().to_request();
-        // let resp = test::call_service(&app, req).await;
-        // assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let store = MemStore::new(1024, chrono::Duration::seconds(60));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(RateLimit::new_default(
+                    store,
+                    10,
+                ))
+                .route("/", web::get().to(empty))
+        ).await;
+
+        let req = test::TestRequest::get().to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
         Ok(())
     }

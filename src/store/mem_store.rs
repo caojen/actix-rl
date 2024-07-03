@@ -43,6 +43,18 @@ pub struct DateCountUntil {
 
 impl Value for DateCountUntil {
     type Count = u32;
+
+    fn count(&self) -> Self::Count {
+        self.date_count.count
+    }
+
+    fn create_date(&self) -> Option<DateTime<Utc>> {
+        Some(self.date_count.create_date)
+    }
+
+    fn expire_date(&self) -> Option<DateTime<Utc>> {
+        Some(self.until)
+    }
 }
 
 /// [MemStore] stores data in memory.

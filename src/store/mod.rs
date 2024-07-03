@@ -1,4 +1,6 @@
 mod mem_store;
+
+use chrono::{DateTime, Utc};
 #[allow(unused_imports)]
 pub use mem_store::*;
 
@@ -55,5 +57,14 @@ pub trait Store: Clone + Send + Sync {
 
 pub trait Value: Send {
     /// [Count] is the type of the counter, such as [u32].
-    type Count: Send;
+    type Count: Send + PartialOrd;
+
+    /// Return the count value from the counter.
+    fn count(&self) -> Self::Count;
+
+    /// Return the time of first creation.
+    fn create_date(&self) -> Option<DateTime<Utc>>;
+
+    /// Return the expiration time.
+    fn expire_date(&self) -> Option<DateTime<Utc>>;
 }
