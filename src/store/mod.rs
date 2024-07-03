@@ -21,14 +21,14 @@ pub trait Store: Clone + Send + Sync {
 
     /// [Key] is used to denote the index type
     /// in key-value pairs.
-    type Key: Send;
+    type Key: Send + Clone;
 
     /// [Value] is a structure used to represent values,
     /// such as the current count and the initial time.
-    type Value: Value;
+    type Value: Value + Clone;
 
     /// Alias of [Value::Count].
-    type Count: Send;
+    type Count: Send + Clone;
 
     /// The [incr_by] function takes a [Key] and
     /// an unsigned integer, indicating the amount
@@ -59,7 +59,7 @@ pub trait Store: Clone + Send + Sync {
 
 pub trait Value: Send {
     /// [Count] is the type of the counter, such as [u32].
-    type Count: Send + PartialOrd;
+    type Count: Send + PartialOrd + Clone;
 
     /// Return the count value from the counter.
     fn count(&self) -> Self::Count;

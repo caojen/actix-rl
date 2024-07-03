@@ -4,10 +4,11 @@ use actix_web::http::StatusCode;
 use crate::error::Error;
 use crate::store::Store;
 
-pub(crate) type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I + 'static>;
+pub(crate) type FromRequestFunc<I> = fn(&HttpRequest) -> I;
 
-pub(crate) type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R + 'static>;
+pub(crate) type FromRequestOnError<E, R> = fn(&HttpRequest, E) -> R;
 
+#[derive(Clone)]
 pub struct Controller<T: Store, B: MessageBody = BoxBody> {
     pub(crate) fn_do_rate_limit: Option<FromRequestFunc<bool>>,
     pub(crate) fn_find_identifier: Option<FromRequestFunc<T::Key>>,
@@ -28,27 +29,27 @@ impl<T: Store, B: MessageBody> Controller<T, B> {
 
     /// Determine if a request needs to be checked for rate limiting.
     /// If not set, all requests will be checked.
-    pub fn with_do_rate_limit(mut self, f: impl Fn(&HttpRequest) -> bool + 'static) -> Self {
-        self.fn_do_rate_limit = Some(Box::new(f));
+    pub fn with_do_rate_limit(mut self, f: FromRequestFunc<bool>) -> Self {
+        self.fn_do_rate_limit = Some(f);
         self
     }
 
     /// Extract the identifier from the request, such as the IP address or other information.
-    pub fn with_find_identifier(mut self, f: impl Fn(&HttpRequest) -> T::Key + 'static) -> Self {
-        self.fn_find_identifier = Some(Box::new(f));
+    pub fn with_find_identifier(mut self, f: FromRequestFunc<T::Key>) -> Self {
+        self.fn_find_identifier = Some(f);
         self
     }
 
     /// Set the [HttpResponse<B>] to be returned when a rate-limit error occurs.
-    pub fn on_rate_limit_error(mut self, f: impl Fn(&HttpRequest, Error) -> HttpResponse<B> + 'static) -> Self {
-        self.fn_on_rate_limit_error = Some(Box::new(f));
+    pub fn on_rate_limit_error(mut self, f: FromRequestOnError<Error, HttpResponse<B>>) -> Self {
+        self.fn_on_rate_limit_error = Some(f);
         self
     }
 
     /// Set the [HttpResponse] to be returned when an error occurs in the [Store]
     /// (such as Redis or other storage structures).
-    pub fn on_store_error(mut self, f: impl Fn(&HttpRequest, <T as Store>::Error) -> HttpResponse<B> + 'static) -> Self {
-        self.fn_on_store_error = Some(Box::new(f));
+    pub fn on_store_error(mut self, f: FromRequestOnError<<T as Store>::Error, HttpResponse<B>>) -> Self {
+        self.fn_on_store_error = Some(f);
         self
     }
 }

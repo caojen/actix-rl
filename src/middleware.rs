@@ -12,10 +12,12 @@ use crate::utils::RateLimitByPass;
 ///
 /// Params [T]: the [Store];
 /// Params [CB]: the response body for [Controller]. (ControllerBody)
+#[derive(Clone)]
 pub struct RateLimit<T: Store, CB: MessageBody = BoxBody> {
     inner: Arc<RateLimitInner<T, CB>>,
 }
 
+#[derive(Clone)]
 struct RateLimitInner<T: Store, CB: MessageBody = BoxBody> {
     pub store: T,
     pub max: <<T as Store>::Value as Value>::Count,
@@ -45,6 +47,7 @@ impl<T, CB, S, B> Transform<S, ServiceRequest> for RateLimit<T, CB>
     }
 }
 
+#[derive(Clone)]
 pub struct RateLimitService<T, CB, S>
     where
         T: Store,
