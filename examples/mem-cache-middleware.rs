@@ -24,13 +24,11 @@ async fn main() -> anyhow::Result<()> {
             let controller = controller::Controller::default();
 
             // finally, create a middleware and return
-            let middleware = RateLimit::new(
+            RateLimit::new(
                 store,
                 100, // max request count is 100 (per minute).
                 controller,
-            );
-
-            middleware
+            )
         };
 
         App::new()
