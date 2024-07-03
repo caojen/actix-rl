@@ -1,5 +1,5 @@
 use actix_web::{HttpRequest, HttpResponse, HttpResponseBuilder};
-use actix_web::body::BoxBody;
+use actix_web::body::{BoxBody, MessageBody};
 use actix_web::http::StatusCode;
 use crate::error::Error;
 use crate::store::Store;
@@ -8,14 +8,14 @@ pub(crate) type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I + 'static>;
 
 pub(crate) type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R + 'static>;
 
-pub struct Controller<T: Store, B = BoxBody> {
+pub struct Controller<T: Store, B: MessageBody = BoxBody> {
     pub(crate) fn_do_rate_limit: Option<FromRequestFunc<bool>>,
     pub(crate) fn_find_identifier: Option<FromRequestFunc<T::Key>>,
     pub(crate) fn_on_rate_limit_error: Option<FromRequestOnError<Error, HttpResponse<B>>>,
     pub(crate) fn_on_store_error: Option<FromRequestOnError<<T as Store>::Error, HttpResponse<B>>>,
 }
 
-impl<T: Store, B> Controller<T, B> {
+impl<T: Store, B: MessageBody> Controller<T, B> {
     /// Create a default Controller
     pub fn new() -> Self {
         Self {
@@ -47,7 +47,7 @@ impl<T: Store, B> Controller<T, B> {
     }
 }
 
-impl<T: Store, B> Default for Controller<T, B> {
+impl<T: Store, B: MessageBody> Default for Controller<T, B> {
     /// alias of [Self::new]
     fn default() -> Self {
         Self::new()

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
-use actix_web::{HttpRequest, HttpResponse, HttpResponseBuilder};
-use actix_web::body::{BoxBody, EitherBody};
+use actix_web::{HttpRequest, HttpResponse};
+use actix_web::body::{BoxBody, EitherBody, MessageBody};
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::StatusCode;
 use futures_util::future::{LocalBoxFuture, Ready, ready};
@@ -14,11 +14,11 @@ use crate::store::{Store, Value};
 ///
 /// Params [T]: the [Store];
 /// Params [CB]: the response body for [Controller]. (ControllerBody)
-pub struct RateLimit<T: Store, CB = BoxBody> {
+pub struct RateLimit<T: Store, CB: MessageBody = BoxBody> {
     inner: Arc<RateLimitInner<T, CB>>,
 }
 
-struct RateLimitInner<T: Store, CB = BoxBody> {
+struct RateLimitInner<T: Store, CB: MessageBody = BoxBody> {
     pub store: T,
     pub max: <<T as Store>::Value as Value>::Count,
     pub controller: Controller<T, CB>,
@@ -27,12 +27,13 @@ struct RateLimitInner<T: Store, CB = BoxBody> {
 impl<T, CB, S, B> Transform<S, ServiceRequest> for RateLimit<T, CB>
     where
         T: Store + 'static,
+        CB: MessageBody + 'static,
         S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
         S::Future: 'static,
         B: 'static,
         <T as Store>::Key: 'static,
 {
-    type Response = ServiceResponse<EitherBody<B, CB>>;
+    type Response = ServiceResponse<EitherBody<B, EitherBody<BoxBody, CB>>>;
     type Error = S::Error;
     type Transform = RateLimitService<T, CB, S>;
     type InitError = ();
@@ -47,7 +48,9 @@ impl<T, CB, S, B> Transform<S, ServiceRequest> for RateLimit<T, CB>
 }
 
 pub struct RateLimitService<T, CB, S>
-    where T: Store,
+    where
+        T: Store,
+        CB: MessageBody,
 {
     inner: Arc<RateLimitInner<T, CB>>,
     service: Rc<S>,
@@ -56,12 +59,13 @@ pub struct RateLimitService<T, CB, S>
 impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
     where
         T: Store + 'static,
+        CB: MessageBody + 'static,
         S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
         S::Future: 'static,
         B: 'static,
         <T as Store>::Key: 'static,
 {
-    type Response = ServiceResponse<EitherBody<B, EitherBody<B, CB>>>;
+    type Response = ServiceResponse<EitherBody<B, EitherBody<BoxBody, CB>>>;
     type Error = S::Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -84,7 +88,7 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
                 let identifier = inner.controller.fn_find_identifier.as_ref()
                     .map(|f| f(svc.request()));
 
-                if let Some(identifier) = identifier {
+                if let Some(identifier) = identifier { // continue only when identifier is found.
                     let req = svc.request();
                     match inner.store.incr(identifier).await {
                         Err(e) => {
@@ -112,7 +116,7 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
                                 let body = f(req, err);
                                 Ok(ServiceResponse::new(
                                     req.clone(),
-                                    body.map_into_right_body().map_into_left_body(),
+                                    body.map_into_right_body().map_into_right_body(),
                                 ))
                             } else {
                                 let body = default_on_rate_limit_error(req, err);
@@ -132,12 +136,12 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
     }
 }
 
-impl<T: Store, B> RateLimit<T, B> {
+impl<T: Store, CB: MessageBody> RateLimit<T, CB> {
     /// create a new [RateLimit] middleware, with all custom functions.
     pub fn new(
         store: T,
         max: <<T as Store>::Value as Value>::Count,
-        controller: Controller<T, B>
+        controller: Controller<T, CB>
     ) -> Self {
         Self {
             inner: Arc::new(RateLimitInner {
@@ -149,23 +153,12 @@ impl<T: Store, B> RateLimit<T, B> {
     }
 }
 
-impl<T: Store<Key = String> + 'static, B> RateLimit<T, B> {
-    /// create a new [RateLimit] middleware with default functions.
-    pub fn new_default(store: T, max: <<T as Store>::Value as Value>::Count) -> Self {
-        Self::new(
-            store,
-            max,
-            Controller::default(),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use actix_web::{App, test, web};
     use chrono::{Utc};
     use tokio::time::Instant;
-    use crate::controller::DEFAULT_RATE_LIMITED_UNTIL_HEADER;
+    use crate::controller::{default_find_identifier, DEFAULT_RATE_LIMITED_UNTIL_HEADER};
     use crate::store::MemStore;
     use super::*;
 
@@ -176,12 +169,14 @@ mod tests {
     #[tokio::test]
     async fn test_middleware() -> anyhow::Result<()> {
         let store = MemStore::new(1024, chrono::Duration::seconds(10));
+        let controller = Controller::<_, BoxBody>::new();
 
         let app = test::init_service(
             App::new()
-                .wrap(RateLimit::new_default(
+                .wrap(RateLimit::new(
                     store,
                     10,
+                    controller,
                 ))
                 .route("/", web::get().to(empty))
         ).await;
@@ -225,8 +220,11 @@ mod tests {
     async fn test_do_rate_limit() -> anyhow::Result<()> {
         let store = MemStore::new(1024, chrono::Duration::seconds(10));
 
-        let controller = Controller::default()
-            .with_do_rate_limit(test_do_rate_limit_default_rate_limit_func);
+        let controller = Controller::<_, BoxBody>::default()
+            .with_do_rate_limit(test_do_rate_limit_default_rate_limit_func)
+            .with_find_identifier(default_find_identifier)
+            .on_rate_limit_error(default_on_rate_limit_error)
+            .on_store_error(default_on_store_error::<MemStore>);
 
         let app = test::init_service(
             App::new()
