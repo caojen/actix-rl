@@ -131,13 +131,15 @@ fn default_find_identifier(req: &HttpRequest) -> String {
         .unwrap_or("<Unknown Source IP>".to_string())
 }
 
+const RATE_LIMITED_UNTIL_HEADER: &str = "X-Rate-Limited-Until";
+
 fn default_on_rate_limit_error(_: &HttpRequest, error: Error) -> HttpResponse {
     match error {
         Error::RateLimited(until) => {
             let mut builder = HttpResponseBuilder::new(StatusCode::TOO_MANY_REQUESTS);
 
             if let Some(until) = until {
-                builder.insert_header(("X-Rate-Limit-Until", until.timestamp().to_string()));
+                builder.insert_header((RATE_LIMITED_UNTIL_HEADER, until.timestamp().to_string()));
             }
 
             builder.finish()
@@ -153,6 +155,8 @@ fn default_on_store_error<T: Store>(_: &HttpRequest, _: T::Error) -> HttpRespons
 #[cfg(test)]
 mod tests {
     use actix_web::{App, test, web};
+    use chrono::{DateTime, Utc};
+    use tokio::time::Instant;
     use crate::store::MemStore;
     use super::*;
 
@@ -173,9 +177,33 @@ mod tests {
                 .route("/", web::get().to(empty))
         ).await;
 
-        let req = test::TestRequest::get().to_request();
-        let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        for _ in 0..10 {
+            let req = test::TestRequest::get().to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        }
+
+        // then, rate limited...
+        let mut wait_until = 0i64;
+        for _ in 0..10 {
+            let req = test::TestRequest::get().to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+            let ts = resp.headers().get(RATE_LIMITED_UNTIL_HEADER).unwrap().to_str().unwrap_or_default();
+            wait_until = ts.parse().unwrap();
+        }
+
+        println!("rate limited until: {}", wait_until);
+        tokio::time::sleep_until(
+            Instant::now() + chrono::Duration::seconds(wait_until - Utc::now().timestamp() + 1).to_std().unwrap()
+        ).await;
+
+        // ok...
+        for _ in 0..5 {
+            let req = test::TestRequest::get().to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        }
 
         Ok(())
     }
