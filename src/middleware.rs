@@ -77,13 +77,15 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
         let inner = self.inner.clone();
 
         Box::pin(async move {
-            let checked = RateLimitByPass::checked(svc.request());
+            let checked = RateLimitByPass::<T>::checked(svc.request());
             let do_rate_limit = !checked && if let Some(f) = &inner.controller.fn_do_rate_limit {
                 f(svc.request())
             } else {
                 // use default function
                 default_do_rate_limit(svc.request())
             };
+
+            let mut rate_limit_value = None;
 
             if do_rate_limit {
                 // get identifier of this request
@@ -110,23 +112,27 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
                             }
 
                         },
-                        Ok(value) => if value.count() > inner.max {
-                            // rate limit error occur
-                            let err = Error::RateLimited(value.expire_date());
+                        Ok(value) => {
+                            if value.count() > inner.max {
+                                // rate limit error occur
+                                let err = Error::RateLimited(value.expire_date());
 
-                            return if let Some(f) = &inner.controller.fn_on_rate_limit_error {
-                                let body = f(req, err);
-                                Ok(ServiceResponse::new(
-                                    req.clone(),
-                                    body.map_into_right_body().map_into_right_body(),
-                                ))
-                            } else {
-                                let body = default_on_rate_limit_error(req, err);
-                                Ok(ServiceResponse::new(
-                                    req.clone(),
-                                    body.map_into_left_body().map_into_right_body(),
-                                ))
+                                return if let Some(f) = &inner.controller.fn_on_rate_limit_error {
+                                    let body = f(req, err);
+                                    Ok(ServiceResponse::new(
+                                        req.clone(),
+                                        body.map_into_right_body().map_into_right_body(),
+                                    ))
+                                } else {
+                                    let body = default_on_rate_limit_error(req, err);
+                                    Ok(ServiceResponse::new(
+                                        req.clone(),
+                                        body.map_into_left_body().map_into_right_body(),
+                                    ))
+                                }
                             }
+
+                            rate_limit_value = Some(value);
                         },
                     }
                 }
@@ -134,7 +140,7 @@ impl<T, CB, S, B> Service<ServiceRequest> for RateLimitService<T, CB, S>
 
             // rate-limit bypass
             // Add a marker to the request to ensure that no further checks are performed on it.
-            RateLimitByPass::check(svc.request());
+            RateLimitByPass::<T>::check(svc.request(), rate_limit_value);
 
             // rate-limit bypass
             let res = service.call(svc).await?.map_into_left_body();

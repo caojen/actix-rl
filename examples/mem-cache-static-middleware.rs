@@ -1,4 +1,4 @@
-//! In this example, we create a RateLimiter stored in static with max 100 requests in 1 minute.
+//! In this example, we create a RateLimiter stored in static with max 10 requests in 10 secs.
 //! We use [store::MemStore] as our storage.
 
 use std::process::exit;
@@ -8,7 +8,7 @@ use actix_rl::{controller, store};
 use actix_rl::middleware::RateLimit;
 
 lazy_static! {
-    static ref STORE: store::MemStore = store::MemStore::new(1024, chrono::Duration::minutes(1));
+    static ref STORE: store::MemStore = store::MemStore::new(1024, chrono::Duration::seconds(10));
 }
 
 #[tokio::main]
@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
             // finally, create a middleware and return
             let middleware = RateLimit::new(
                 STORE.clone(),
-                100, // max request count is 100 (per minute).
+                10, // max request count is 10 (per 10 secs).
                 controller,
             );
 
