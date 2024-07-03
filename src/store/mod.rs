@@ -96,7 +96,7 @@ impl<T: Store> Store for Arc<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: Store> Store for &'static T {
+impl<'a, T: Store> Store for &'a T {
     type Error = T::Error;
     type Key = T::Key;
     type Value = T::Value;
