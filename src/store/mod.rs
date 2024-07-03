@@ -94,3 +94,27 @@ impl<T: Store> Store for Arc<T> {
         self.deref().clear().await
     }
 }
+
+#[async_trait::async_trait]
+impl<T: Store> Store for &'static T {
+    type Error = T::Error;
+    type Key = T::Key;
+    type Value = T::Value;
+    type Count = T::Count;
+
+    async fn incr_by(&self, key: Self::Key, val: Self::Count) -> Result<Self::Value, Self::Error> {
+        (*self).incr_by(key, val).await
+    }
+
+    async fn incr(&self, key: Self::Key) -> Result<Self::Value, Self::Error> {
+        (*self).incr(key).await
+    }
+
+    async fn del(&self, key: Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+        (*self).del(key).await
+    }
+
+    async fn clear(&self) -> Result<(), Self::Error> {
+        (*self).clear().await
+    }
+}
