@@ -5,6 +5,8 @@ edition = "2021"
 authors = ["caojen <caojen@mail2.sysu.edu.cn>"]
 description = "`actix-rl` is a RateLimit middleware for the `actix-web` library."
 keywords = ["rate-limit", "actix-web"]
+license = "MIT"
+repository = "https://github.com/caojen/actix-rl"
 
 [features]
 redis-store = ["redis"]
