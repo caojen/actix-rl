@@ -1,5 +1,7 @@
 mod mem_store;
 
+use std::ops::Deref;
+use std::sync::Arc;
 use chrono::{DateTime, Utc};
 #[allow(unused_imports)]
 pub use mem_store::*;
@@ -67,4 +69,28 @@ pub trait Value: Send {
 
     /// Return the expiration time.
     fn expire_date(&self) -> Option<DateTime<Utc>>;
+}
+
+#[async_trait::async_trait]
+impl<T: Store> Store for Arc<T> {
+    type Error = <T as Store>::Error;
+    type Key = <T as Store>::Key;
+    type Value = <T as Store>::Value;
+    type Count = <T as Store>::Count;
+
+    async fn incr_by(&self, key: Self::Key, val: Self::Count) -> Result<Self::Value, Self::Error> {
+        self.deref().incr_by(key, val).await
+    }
+
+    async fn incr(&self, key: Self::Key) -> Result<Self::Value, Self::Error> {
+        self.deref().incr(key).await
+    }
+
+    async fn del(&self, key: Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+        self.deref().del(key).await
+    }
+
+    async fn clear(&self) -> Result<(), Self::Error> {
+        self.deref().clear().await
+    }
 }
