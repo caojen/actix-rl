@@ -8,7 +8,7 @@ use actix_rl::{controller, store};
 use actix_rl::middleware::RateLimit;
 
 lazy_static! {
-    static ref STORE: store::MemStore = store::MemStore::new(1024, chrono::Duration::seconds(10));
+    static ref STORE: store::mem_store::MemStore = store::mem_store::MemStore::new(1024, chrono::Duration::seconds(10));
 }
 
 #[tokio::main]

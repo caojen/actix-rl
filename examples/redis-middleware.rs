@@ -5,7 +5,7 @@ use std::process::exit;
 use actix_web::{App, HttpServer, web};
 use actix_rl::controller;
 use actix_rl::middleware::RateLimit;
-use actix_rl::store::RedisStore;
+use actix_rl::store::redis_store::RedisStore;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
             // first, create a store, using store::MemStore.
             // we initialize the capacity of our mem-store is 1024. The capacity would grow automatically.
             // we set the expiry duration is 1 minute here.
-            let store = store::MemStore::new(1024, chrono::Duration::minutes(1));
+            let store = store::mem_store::MemStore::new(1024, chrono::Duration::minutes(1));
 
             // then, create a default controller which controls request handling.
             let controller = controller::Controller::default();
