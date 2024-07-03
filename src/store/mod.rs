@@ -1,6 +1,12 @@
+#![allow(unused_imports)]
+
 mod mem_store;
-#[allow(unused_imports)]
+#[cfg(feature = "redis-store")]
+mod redis_store;
+
 pub use mem_store::*;
+#[cfg(feature = "redis-store")]
+pub use redis_store::*;
 
 use std::ops::Deref;
 use std::sync::Arc;

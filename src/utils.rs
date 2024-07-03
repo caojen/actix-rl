@@ -8,7 +8,7 @@ pub struct RateLimitByPass<T: Store + 'static> {
 
 impl<T: Store + 'static> RateLimitByPass<T> {
     pub(crate) fn checked(req: &HttpRequest) -> bool {
-        req.extensions().get::<RateLimitByPass<T>>().is_some()
+        Self::from_request(req).is_some()
     }
 
     pub(crate) fn check(req: &HttpRequest, value: Option<<T as Store>::Value>) {
@@ -18,5 +18,9 @@ impl<T: Store + 'static> RateLimitByPass<T> {
 
     pub fn get_value(&self) -> Option<&<T as Store>::Value> {
         self.value.as_ref()
+    }
+
+    pub fn from_request(req: &HttpRequest) -> Option<RateLimitByPass<T>> {
+        req.extensions().get::<RateLimitByPass<T>>().cloned()
     }
 }

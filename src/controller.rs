@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::store::Store;
 
 pub(crate) type FromRequestFunc<I> = fn(&HttpRequest) -> I;
-pub(crate) type FromRequestWithRef<V> = fn(&HttpRequest, &V);
+pub(crate) type FromRequestWithRef<S, V> = fn(&HttpRequest, &S, Option<&V>);
 pub(crate) type FromRequestOnError<E, R> = fn(&HttpRequest, E) -> R;
 
 #[derive(Clone)]
@@ -14,7 +14,7 @@ pub struct Controller<T: Store, B: MessageBody = BoxBody> {
     pub(crate) fn_find_identifier: Option<FromRequestFunc<T::Key>>,
     pub(crate) fn_on_rate_limit_error: Option<FromRequestOnError<Error, HttpResponse<B>>>,
     pub(crate) fn_on_store_error: Option<FromRequestOnError<<T as Store>::Error, HttpResponse<B>>>,
-    pub(crate) fn_on_success: Option<FromRequestWithRef<T>>,
+    pub(crate) fn_on_success: Option<FromRequestWithRef<T, T::Value>>,
 }
 
 impl<T: Store, B: MessageBody> Controller<T, B> {
@@ -57,7 +57,7 @@ impl<T: Store, B: MessageBody> Controller<T, B> {
 
     /// Execute this function whenever a request successfully passes
     /// (including those skipped by [Self::fn_do_rate_limit]).
-    pub fn on_success(mut self, f: FromRequestWithRef<T>) -> Self {
+    pub fn on_success(mut self, f: FromRequestWithRef<T, T::Value>) -> Self {
         self.fn_on_success = Some(f);
         self
     }
