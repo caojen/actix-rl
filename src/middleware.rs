@@ -8,9 +8,9 @@ use futures_util::future::{LocalBoxFuture, Ready, ready};
 use crate::error::Error;
 use crate::store::{Store, Value};
 
-type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I + 'static>;
+pub(crate) type FromRequestFunc<I> = Box<dyn Fn(&HttpRequest) -> I + 'static>;
 
-type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R + 'static>;
+pub(crate) type FromRequestOnError<E, R> = Box<dyn Fn(&HttpRequest, E) -> R + 'static>;
 
 pub struct RateLimit<T: Store> {
     inner: Arc<RateLimitInner<T>>,
@@ -142,7 +142,7 @@ pub fn default_find_identifier(req: &HttpRequest) -> String {
         .unwrap_or("<Unknown Source IP>".to_string())
 }
 
-const RATE_LIMITED_UNTIL_HEADER: &str = "X-Rate-Limited-Until";
+pub const RATE_LIMITED_UNTIL_HEADER: &str = "X-Rate-Limited-Until";
 
 pub fn default_on_rate_limit_error(_: &HttpRequest, error: Error) -> HttpResponse {
     match error {
