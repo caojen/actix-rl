@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 use actix_web::{HttpRequest, HttpResponse, HttpResponseBuilder};
-use actix_web::body::{BoxBody, EitherBody};
+use actix_web::body::EitherBody;
 use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::StatusCode;
 use futures_util::future::{LocalBoxFuture, Ready, ready};
@@ -164,18 +164,18 @@ mod tests {
     async fn test_middleware() -> anyhow::Result<()> {
         let store = MemStore::new(1024, chrono::Duration::seconds(60));
 
-        // let app = test::init_service(
-        //     App::new()
-        //         .wrap(RateLimit::new_default(
-        //             store,
-        //             10,
-        //         ))
-        //         .route("/", web::get().to(empty))
-        // ).await;
-        //
-        // let req = test::TestRequest::get().to_request();
-        // let resp = test::call_service(&app, req).await;
-        // assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let app = test::init_service(
+            App::new()
+                .wrap(RateLimit::new_default(
+                    store,
+                    10,
+                ))
+                .route("/", web::get().to(empty))
+        ).await;
+
+        let req = test::TestRequest::get().to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
         Ok(())
     }
