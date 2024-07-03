@@ -8,6 +8,9 @@ use crate::error::Error;
 use crate::store::{Store, Value};
 use crate::utils::RateLimitByPass;
 
+/// alias of [RateLimit]
+pub type RateLimitMiddleware<T, CB> = RateLimit<T, CB>;
+
 /// [RateLimit] is the rate-limit middleware.
 ///
 /// Params [T]: the [Store];
