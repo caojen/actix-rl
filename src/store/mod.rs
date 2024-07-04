@@ -20,7 +20,7 @@ use chrono::{DateTime, Utc};
 pub trait Store: Clone + Send + Sync {
     /// [Error] represents possible errors that may
     /// occur during the execution of a function.
-    type Error;
+    type Error: Debug;
 
     /// [Key] is used to denote the index type
     /// in key-value pairs.
