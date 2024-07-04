@@ -4,6 +4,7 @@ pub mod mem_store;
 #[cfg(feature = "redis-store")]
 pub mod redis_store;
 
+use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
@@ -27,7 +28,7 @@ pub trait Store: Clone + Send + Sync {
 
     /// [Value] is a structure used to represent values,
     /// such as the current count and the initial time.
-    type Value: Value + Clone;
+    type Value: Value;
 
     /// Alias of [Value::Count].
     type Count: Send + Clone;
@@ -59,7 +60,7 @@ pub trait Store: Clone + Send + Sync {
     async fn clear(&self) -> Result<(), Self::Error>;
 }
 
-pub trait Value: Send {
+pub trait Value: Send + Clone + Debug {
     /// [Count] is the type of the counter, such as [u32].
     type Count: Send + PartialOrd + Clone;
 
