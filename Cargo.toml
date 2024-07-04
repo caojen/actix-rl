@@ -1,6 +1,6 @@
 [package]
 name = "actix-rl"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["caojen <caojen@mail2.sysu.edu.cn>"]
 description = "`actix-rl` is a RateLimit middleware for the `actix-web` library."
